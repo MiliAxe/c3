@@ -27,6 +27,7 @@ use std::{
 };
 use tui_textarea::{CursorMove, Input, TextArea};
 mod help;
+mod keymap;
 mod potato;
 mod todo_buffer;
 use todo_buffer::TodoBuffer;
