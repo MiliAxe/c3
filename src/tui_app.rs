@@ -6,7 +6,7 @@ use crossterm::{
         self,
         Event::Key,
         KeyCode::{self, Char},
-        KeyModifiers,
+        KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
     },
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
@@ -16,8 +16,8 @@ use nix::sys::signal::{kill, Signal};
 #[cfg(unix)]
 use nix::unistd::getpid;
 use ratatui::{prelude::*, widgets::*};
-use std::io::Write;
 use std::ops::Not;
+use std::{arch::x86_64, io::Write};
 use std::{
     io::{self, BufRead, BufReader},
     path::PathBuf,
@@ -39,7 +39,11 @@ use c3::{
 pub use tree_search::TreeSearch;
 
 use help::HelpPage;
+use keymap::{key_event_to_string, Keymap, KeymapManager};
 use potato::Potato;
+use std::sync::Arc;
+
+use crate::keymap_entry;
 // }}}
 
 #[derive(Debug)]
@@ -70,6 +74,7 @@ pub struct TuiApp<'a> {
     show_right: bool,
     show_help: bool,
     help_page: HelpPage,
+    normal_keymaps: KeymapManager<'a>,
     mode: Mode,
     on_submit: Option<fn(&mut Self, String) -> ()>,
     on_delete: Option<fn(&mut Self, String, String) -> ()>,
@@ -105,7 +110,9 @@ impl<'a> TuiApp<'a> {
     pub fn new(app: &'a mut App, args: TuiArgs) -> Self {
         let mut textarea = TextArea::default();
         textarea.set_cursor_line_style(Style::default());
-        let app_help_page = TuiApp::get_default_help_page();
+        let normal_keymaps = Self::create_normal_keymaps();
+        let app_help_page = TuiApp::get_default_help_page(&normal_keymaps);
+
         TuiApp {
             tree_search: Default::default(),
             todo_buffer: Default::default(),
@@ -118,40 +125,380 @@ impl<'a> TuiApp<'a> {
             on_delete: None,
             show_right: true,
             help_page: app_help_page,
+            normal_keymaps,
             show_help: false,
             mode: Default::default(),
             last_restriction: None,
         }
     }
 
-    fn get_default_help_page() -> HelpPage {
+    fn create_normal_keymaps() -> KeymapManager<'a> {
+        let keymaps_vec = vec![
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+                "Toggle help window",
+                |app: &mut TuiApp| { app.show_help = !app.show_help; }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+                "Prepend todo",
+                |app: &mut TuiApp| { app.prepend_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+                "Suspend application (Unix)",
+                |app: &mut TuiApp| {
+                    let _ = shutdown();
+                    #[cfg(unix)] {
+                        let _ = nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGTSTP);
+                    }
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+                "Open file browser",
+                |app: &mut TuiApp| { app.nnn_open(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+                "Remove todo and yank",
+                |app: &mut TuiApp| {
+                    app.todo_app.remove_todo();
+                    if let Some(todo) = app.todo_app.removed_todos.pop() {
+                        app.todo_buffer.yank(todo);
+                    }
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+                "Toggle daily",
+                |app: &mut TuiApp| { app.todo_app.toggle_current_daily(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('W'), KeyModifiers::NONE),
+                "Toggle weekly",
+                |app: &mut TuiApp| { app.todo_app.toggle_current_weekly(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+                "Schedule prompt",
+                |app: &mut TuiApp| { app.schedule_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
+                "Reminder prompt",
+                |app: &mut TuiApp| { app.reminder_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('M'), KeyModifiers::NONE),
+                "Toggle schedule",
+                |app: &mut TuiApp| {
+                    if let Some(todo) = app.todo_app.todo_mut() {
+                        todo.toggle_schedule();
+                    }
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
+                "Toggle show done",
+                |app: &mut TuiApp| { app.todo_app.toggle_show_done(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE),
+                "Priority prompt",
+                |app: &mut TuiApp| { app.priority_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('%'), KeyModifiers::NONE),
+                "Schedule restriction prompt",
+                |app: &mut TuiApp| { app.schedule_restriction_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                "Yank todo",
+                |app: &mut TuiApp| {
+                    let todo = app.todo_app.todo().cloned();
+                    app.todo_buffer.yank(todo);
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+                "Paste todo",
+                |app: &mut TuiApp| {
+                    if let Some(todo) = app.todo_buffer.get() {
+                        let list = app.todo_app.current_list_mut();
+                        list.push(todo);
+                        app.todo_app.index = list.reorder_last();
+                    }
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+                "Increase day by 1",
+                |app: &mut TuiApp| { app.todo_app.increase_day_by(1); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('I'), KeyModifiers::NONE),
+                "Increase day by -1",
+                |app: &mut TuiApp| { app.todo_app.increase_day_by(-1); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+                "Append todo",
+                |app: &mut TuiApp| {
+                    app.nnn_append_todo();
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE),
+                "Output todo",
+                |app: &mut TuiApp| {
+                    app.nnn_output_todo();
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                "Move down",
+                |app: &mut TuiApp| { app.todo_app.go_down(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+                "Move down",
+                |app: &mut TuiApp| { app.todo_app.go_down(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                "Move up",
+                |app: &mut TuiApp| { app.todo_app.go_up(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+                "Move up",
+                |app: &mut TuiApp| { app.todo_app.go_up(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                "Move right",
+                |app: &mut TuiApp| { app.todo_app.add_dependency_traverse_down(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+                "Move right",
+                |app: &mut TuiApp| { app.todo_app.add_dependency_traverse_down(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                "Traverse down",
+                |app: &mut TuiApp| { app.todo_app.traverse_down(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+                "Move left",
+                |app: &mut TuiApp| { app.todo_app.traverse_up(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+                "Move left",
+                |app: &mut TuiApp| { app.todo_app.traverse_up(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+                "Go to top",
+                |app: &mut TuiApp| { app.todo_app.index = 0; }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+                "Go to top",
+                |app: &mut TuiApp| { app.todo_app.index = 0; }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+                "Go to bottom",
+                |app: &mut TuiApp| { app.todo_app.index = app.todo_app.bottom(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
+                "Go to bottom",
+                |app: &mut TuiApp| { app.todo_app.index = app.todo_app.bottom(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+                "Write",
+                |app: &mut TuiApp| { let _ = app.write(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE),
+                "Move current down",
+                |app: &mut TuiApp| { app.todo_app.move_current_down(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE),
+                "Move current up",
+                |app: &mut TuiApp| { app.todo_app.move_current_up(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE),
+                "Toggle right panel",
+                |app: &mut TuiApp| { app.show_right = !app.show_right; }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+                "Toggle module",
+                |app: &mut TuiApp| { app.args.enable_module = !app.args.enable_module; }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('>'), KeyModifiers::NONE),
+                "Edit or add note",
+                |app: &mut TuiApp| {
+                    app.todo_app.edit_or_add_note();
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                "Add dependency",
+                |app: &mut TuiApp| { app.todo_app.add_dependency(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE),
+                "Remove todo",
+                |app: &mut TuiApp| { app.todo_app.remove_todo(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+                "Read",
+                |app: &mut TuiApp| { app.todo_app.read(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+                "Remove current dependent",
+                |app: &mut TuiApp| { app.todo_app.remove_current_dependent(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+                "Toggle current done",
+                |app: &mut TuiApp| { app.todo_app.toggle_current_done(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                "Next search result",
+                |app: &mut TuiApp| {
+                    app.tree_search.next();
+                    app.tree_search.set_to_app(app.todo_app);
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+                "Search prompt",
+                |app: &mut TuiApp| { app.search_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('\''), KeyModifiers::NONE),
+                "Tree search prompt",
+                |app: &mut TuiApp| { app.tree_search_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+                "Append todo at first",
+                |app: &mut TuiApp| { app.append_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+                "Edit todo",
+                |app: &mut TuiApp| { app.edit_prompt(false); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE),
+                "Edit todo (start)",
+                |app: &mut TuiApp| { app.edit_prompt(true); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                "Batch edit messages",
+                |app: &mut TuiApp| { app.todo_app.batch_editor_messages(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('~'), KeyModifiers::NONE),
+                "Go to root",
+                |app: &mut TuiApp| { app.todo_app.go_root(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+                "Quit and save prompt",
+                |app: &mut TuiApp| { app.quit_save_prompt(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+                "Batch edit messages",
+                |app: &mut TuiApp| { app.todo_app.batch_editor_messages(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+                "Skip potato module",
+                |app: &mut TuiApp| { app.potato_module.skip(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('H'), KeyModifiers::NONE),
+                "Increase potato timer",
+                |app: &mut TuiApp| { app.potato_module.increase_timer(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+                "Toggle potato pause",
+                |app: &mut TuiApp| { app.potato_module.toggle_pause(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE),
+                "Quit potato module",
+                |app: &mut TuiApp| { app.potato_module.quit(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE),
+                "Decrease potato timer",
+                |app: &mut TuiApp| { app.potato_module.decrease_timer(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+                "Restart potato module",
+                |app: &mut TuiApp| { app.potato_module.restart(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE),
+                "FZF search",
+                |app: &mut TuiApp| {
+                    fzf_search(app.todo_app);
+                }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE),
+                "Increase pomodoro",
+                |app: &mut TuiApp| { app.potato_module.increase_pomodoro(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE),
+                "Decrease pomodoro",
+                |app: &mut TuiApp| { app.potato_module.decrease_pomodoro(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE),
+                "Next potato module",
+                |app: &mut TuiApp| { app.potato_module.next(); }
+            ),
+            keymap_entry!(
+                KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE),
+                "Previous potato module",
+                |app: &mut TuiApp| { app.potato_module.prev(); }
+            ),
+        ];
+        KeymapManager::from(keymaps_vec)
+    }
+
+
+    fn get_default_help_page(keymap: &KeymapManager) -> HelpPage {
         let mut help_page = HelpPage::default();
 
-        help_page.add_entry("q", "Quit the application");
-        help_page.add_entry("j", "Move down");
-        help_page.add_entry("k", "Move up");
-        help_page.add_entry("h", "Move left");
-        help_page.add_entry("l", "Move right");
-        help_page.add_entry("i", "Increase day by 1");
-        help_page.add_entry("I", "Decrease day by 1");
-        help_page.add_entry("o", "Append todo");
-        help_page.add_entry("O", "Output todo");
-        help_page.add_entry("a", "Prepend todo");
-        help_page.add_entry("A", "Append todo at first");
-        help_page.add_entry("e", "Edit todo");
-        help_page.add_entry("E", "Edit todo (start)");
-        help_page.add_entry("r", "Batch edit messages");
-        help_page.add_entry("s", "Skip potato module");
-        help_page.add_entry("H", "Increase potato timer");
-        help_page.add_entry("c", "Toggle potato pause");
-        help_page.add_entry("C", "Quit potato module");
-        help_page.add_entry("L", "Decrease potato timer");
-        help_page.add_entry("f", "Restart potato module");
-        help_page.add_entry("F", "FZF search");
-        help_page.add_entry("+", "Increase pomodoro");
-        help_page.add_entry("-", "Decrease pomodoro");
-        help_page.add_entry(".", "Next potato module");
-        help_page.add_entry(",", "Previous potato module");
+        for (key, keymap) in keymap.get_all() {
+            help_page.add_entry(key_event_to_string(&key).as_str(), keymap.description.clone().as_str());
+        }
 
         help_page
     }
@@ -568,123 +915,127 @@ impl<'a> TuiApp<'a> {
     fn handle_normal_input(&mut self) -> io::Result<HandlerOperation> {
         let event = event::read()?;
         if let Key(key) = event {
-            if key.kind == event::KeyEventKind::Press {
-                match key.code {
-                    #[cfg(unix)]
-                    Char('z') if key.modifiers == KeyModifiers::CONTROL => {
-                        shutdown()?;
-                        let _ = kill(getpid(), Signal::SIGTSTP);
-                        return Ok(HandlerOperation::Restart);
-                    }
-                    Char('o') if key.modifiers == KeyModifiers::CONTROL => {
-                        self.nnn_open();
-                        return Ok(HandlerOperation::Restart);
-                    }
-                    Char('x') => {
-                        self.todo_app.remove_todo();
-                        if let Some(todo) = self.todo_app.removed_todos.pop() {
-                            self.todo_buffer.yank(todo);
-                        }
-                    }
-                    Char('d') => self.todo_app.toggle_current_daily(),
-                    Char('W') => self.todo_app.toggle_current_weekly(),
-                    Char('S') => self.schedule_prompt(),
-                    Char('m') => self.reminder_prompt(),
-                    Char('M') => {
-                        if let Some(todo) = self.todo_app.todo_mut() {
-                            todo.toggle_schedule();
-                        }
-                    }
-                    Char('!') => self.todo_app.toggle_show_done(),
-                    Char('@') => self.priority_prompt(),
-                    Char('%') => self.schedule_restriction_prompt(),
-                    Char('y') => {
-                        let todo = self.todo_app.todo().cloned();
-                        self.todo_buffer.yank(todo);
-                    }
-                    Char('p') => {
-                        if let Some(todo) = self.todo_buffer.get() {
-                            let list = self.todo_app.current_list_mut();
-                            list.push(todo);
-                            self.todo_app.index = list.reorder_last();
-                        }
-                    }
-                    Char('i') => self.todo_app.increase_day_by(1),
-                    Char('I') => self.todo_app.increase_day_by(-1),
-                    Char('o') => {
-                        self.nnn_append_todo();
-                        return Ok(HandlerOperation::Restart);
-                    }
-                    Char('O') => {
-                        self.nnn_output_todo();
-                        return Ok(HandlerOperation::Restart);
-                    }
-                    KeyCode::Down | Char('j') => self.todo_app.go_down(),
-                    KeyCode::Up | Char('k') => self.todo_app.go_up(),
-                    KeyCode::Right | Char('l') => self.todo_app.add_dependency_traverse_down(),
-                    KeyCode::Enter => self.todo_app.traverse_down(),
-                    KeyCode::Left | Char('h') => {
-                        self.todo_app.traverse_up();
-                    }
-                    KeyCode::Home | Char('g') => {
-                        self.todo_app.index = 0;
-                    }
-                    KeyCode::End | Char('G') => self.todo_app.index = self.todo_app.bottom(),
-                    Char('w') => self.write()?,
-                    Char('J') => self.todo_app.move_current_down(),
-                    Char('K') => self.todo_app.move_current_up(),
-                    Char(']') => self.show_right = !self.show_right,
-                    Char('P') => self.args.enable_module = !self.args.enable_module,
-                    Char('>') => {
-                        self.todo_app.edit_or_add_note();
-                        return Ok(HandlerOperation::Restart);
-                    }
-                    Char('t') => self.todo_app.add_dependency(),
-                    Char('D') => {
-                        self.todo_app.remove_todo();
-                    }
-                    Char('R') => self.todo_app.read(),
-                    Char('T') => self.todo_app.remove_current_dependent(),
-                    Char(' ') => self.todo_app.toggle_current_done(),
-                    Char('n') => {
-                        self.tree_search.next();
-                        self.tree_search.set_to_app(self.todo_app);
-                    }
-                    Char('a') => self.prepend_prompt(),
-                    Char('/') => self.search_prompt(),
-                    Char('\'') => self.tree_search_prompt(),
-                    Char('A') => self.append_prompt(),
-                    Char('e') | Char('E') => self.edit_prompt(key.code == Char('E')),
-                    Char('r') if key.modifiers == KeyModifiers::CONTROL => self.edit_prompt(false),
-                    Char('~') => self.todo_app.go_root(),
-                    Char('q') => self.quit_save_prompt(),
-                    Char('r') => {
-                        self.todo_app.batch_editor_messages();
-                        return Ok(HandlerOperation::Restart);
-                    }
-                    Char(c) if c.is_ascii_digit() => {
-                        let priority = c.to_digit(10).unwrap();
-                        self.todo_app.set_current_priority(priority as u8);
-                    }
-                    Char('?') => self.show_help = !self.show_help,
-
-                    Char('s') => self.potato_module.skip(),
-                    Char('H') => self.potato_module.increase_timer(),
-                    Char('c') => self.potato_module.toggle_pause(),
-                    Char('C') => self.potato_module.quit(),
-                    Char('L') => self.potato_module.decrease_timer(),
-                    Char('f') => self.potato_module.restart(),
-                    Char('F') => {
-                        fzf_search(self.todo_app);
-                        return Ok(HandlerOperation::Restart);
-                    }
-                    Char('+') | Char('=') => self.potato_module.increase_pomodoro(),
-                    Char('-') => self.potato_module.decrease_pomodoro(),
-                    Char('.') => self.potato_module.next(),
-                    Char(',') => self.potato_module.prev(),
-                    _ => {}
-                }
+            let action = { self.normal_keymaps.get_action(key) };
+            if let Some(action) = action {
+                action(self);
             }
+
+            // if key.kind == event::KeyEventKind::Press {
+            //     match key.code {
+            //         #[cfg(unix)]
+            //         Char('z') if key.modifiers == KeyModifiers::CONTROL => {
+            //             shutdown()?;
+            //             let _ = kill(getpid(), Signal::SIGTSTP);
+            //             return Ok(HandlerOperation::Restart);
+            //         }
+            //         Char('o') if key.modifiers == KeyModifiers::CONTROL => {
+            //             self.nnn_open();
+            //             return Ok(HandlerOperation::Restart);
+            //         }
+            //         Char('x') => {
+            //             self.todo_app.remove_todo();
+            //             if let Some(todo) = self.todo_app.removed_todos.pop() {
+            //                 self.todo_buffer.yank(todo);
+            //             }
+            //         }
+            //         Char('d') => self.todo_app.toggle_current_daily(),
+            //         Char('W') => self.todo_app.toggle_current_weekly(),
+            //         Char('S') => self.schedule_prompt(),
+            //         Char('m') => self.reminder_prompt(),
+            //         Char('M') => {
+            //             if let Some(todo) = self.todo_app.todo_mut() {
+            //                 todo.toggle_schedule();
+            //             }
+            //         }
+            //         Char('!') => self.todo_app.toggle_show_done(),
+            //         Char('@') => self.priority_prompt(),
+            //         Char('%') => self.schedule_restriction_prompt(),
+            //         Char('y') => {
+            //             let todo = self.todo_app.todo().cloned();
+            //             self.todo_buffer.yank(todo);
+            //         }
+            //         Char('p') => {
+            //             if let Some(todo) = self.todo_buffer.get() {
+            //                 let list = self.todo_app.current_list_mut();
+            //                 list.push(todo);
+            //                 self.todo_app.index = list.reorder_last();
+            //             }
+            //         }
+            //         Char('i') => self.todo_app.increase_day_by(1),
+            //         Char('I') => self.todo_app.increase_day_by(-1),
+            //         Char('o') => {
+            //             self.nnn_append_todo();
+            //             return Ok(HandlerOperation::Restart);
+            //         }
+            //         Char('O') => {
+            //             self.nnn_output_todo();
+            //             return Ok(HandlerOperation::Restart);
+            //         }
+            //         KeyCode::Down | Char('j') => self.todo_app.go_down(),
+            //         KeyCode::Up | Char('k') => self.todo_app.go_up(),
+            //         KeyCode::Right | Char('l') => self.todo_app.add_dependency_traverse_down(),
+            //         KeyCode::Enter => self.todo_app.traverse_down(),
+            //         KeyCode::Left | Char('h') => {
+            //             self.todo_app.traverse_up();
+            //         }
+            //         KeyCode::Home | Char('g') => {
+            //             self.todo_app.index = 0;
+            //         }
+            //         KeyCode::End | Char('G') => self.todo_app.index = self.todo_app.bottom(),
+            //         Char('w') => self.write()?,
+            //         Char('J') => self.todo_app.move_current_down(),
+            //         Char('K') => self.todo_app.move_current_up(),
+            //         Char(']') => self.show_right = !self.show_right,
+            //         Char('P') => self.args.enable_module = !self.args.enable_module,
+            //         Char('>') => {
+            //             self.todo_app.edit_or_add_note();
+            //             return Ok(HandlerOperation::Restart);
+            //         }
+            //         Char('t') => self.todo_app.add_dependency(),
+            //         Char('D') => {
+            //             self.todo_app.remove_todo();
+            //         }
+            //         Char('R') => self.todo_app.read(),
+            //         Char('T') => self.todo_app.remove_current_dependent(),
+            //         Char(' ') => self.todo_app.toggle_current_done(),
+            //         Char('n') => {
+            //             self.tree_search.next();
+            //             self.tree_search.set_to_app(self.todo_app);
+            //         }
+            //         Char('a') => self.prepend_prompt(),
+            //         Char('/') => self.search_prompt(),
+            //         Char('\'') => self.tree_search_prompt(),
+            //         Char('A') => self.append_prompt(),
+            //         Char('e') | Char('E') => self.edit_prompt(key.code == Char('E')),
+            //         Char('r') if key.modifiers == KeyModifiers::CONTROL => self.edit_prompt(false),
+            //         Char('~') => self.todo_app.go_root(),
+            //         Char('q') => self.quit_save_prompt(),
+            //         Char('r') => {
+            //             self.todo_app.batch_editor_messages();
+            //             return Ok(HandlerOperation::Restart);
+            //         }
+            //         Char(c) if c.is_ascii_digit() => {
+            //             let priority = c.to_digit(10).unwrap();
+            //             self.todo_app.set_current_priority(priority as u8);
+            //         }
+            //         // Char('?') => self.show_help = !self.show_help,
+            //         Char('s') => self.potato_module.skip(),
+            //         Char('H') => self.potato_module.increase_timer(),
+            //         Char('c') => self.potato_module.toggle_pause(),
+            //         Char('C') => self.potato_module.quit(),
+            //         Char('L') => self.potato_module.decrease_timer(),
+            //         Char('f') => self.potato_module.restart(),
+            //         Char('F') => {
+            //             fzf_search(self.todo_app);
+            //             return Ok(HandlerOperation::Restart);
+            //         }
+            //         Char('+') | Char('=') => self.potato_module.increase_pomodoro(),
+            //         Char('-') => self.potato_module.decrease_pomodoro(),
+            //         Char('.') => self.potato_module.next(),
+            //         Char(',') => self.potato_module.prev(),
+            //         _ => {}
+            //     }
+            // }
         }
         Ok(HandlerOperation::Nothing)
     }
