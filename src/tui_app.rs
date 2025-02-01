@@ -6,7 +6,7 @@ use crossterm::{
         self,
         Event::Key,
         KeyCode::{self, Char},
-        KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+        KeyEvent, KeyModifiers,
     },
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
@@ -17,7 +17,7 @@ use nix::sys::signal::{kill, Signal};
 use nix::unistd::getpid;
 use ratatui::{prelude::*, widgets::*};
 use std::ops::Not;
-use std::{arch::x86_64, io::Write};
+use std::io::Write;
 use std::{
     io::{self, BufRead, BufReader},
     path::PathBuf,
@@ -147,10 +147,10 @@ impl<'a> TuiApp<'a> {
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
                 "Suspend application (Unix)",
-                |app: &mut TuiApp| {
+                |_app: &mut TuiApp| {
                     let _ = shutdown();
                     #[cfg(unix)] {
-                        let _ = nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGTSTP);
+                        let _ = kill(getpid(), Signal::SIGTSTP);
                     }
                 }
             ),
