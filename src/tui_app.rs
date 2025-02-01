@@ -651,7 +651,7 @@ impl<'a> TuiApp<'a> {
                     }
                     Char('a') => self.prepend_prompt(),
                     Char('/') => self.search_prompt(),
-                    Char('?') => self.tree_search_prompt(),
+                    Char('\'') => self.tree_search_prompt(),
                     Char('A') => self.append_prompt(),
                     Char('e') | Char('E') => self.edit_prompt(key.code == Char('E')),
                     Char('r') if key.modifiers == KeyModifiers::CONTROL => self.edit_prompt(false),
@@ -665,7 +665,7 @@ impl<'a> TuiApp<'a> {
                         let priority = c.to_digit(10).unwrap();
                         self.todo_app.set_current_priority(priority as u8);
                     }
-                    KeyCode::F(1) => self.show_help = !self.show_help,
+                    Char('?') => self.show_help = !self.show_help,
 
                     Char('s') => self.potato_module.skip(),
                     Char('H') => self.potato_module.increase_timer(),
