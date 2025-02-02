@@ -16,8 +16,8 @@ use nix::sys::signal::{kill, Signal};
 #[cfg(unix)]
 use nix::unistd::getpid;
 use ratatui::{prelude::*, widgets::*};
-use std::ops::Not;
 use std::io::Write;
+use std::ops::Not;
 use std::{
     io::{self, BufRead, BufReader},
     path::PathBuf,
@@ -137,27 +137,38 @@ impl<'a> TuiApp<'a> {
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
                 "Toggle help window",
-                |app: &mut TuiApp| { app.show_help = !app.show_help; }
+                |app: &mut TuiApp| {
+                    app.show_help = !app.show_help;
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
                 "Prepend todo",
-                |app: &mut TuiApp| { app.prepend_prompt(); }
+                |app: &mut TuiApp| {
+                    app.prepend_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
                 "Suspend application (Unix)",
                 |_app: &mut TuiApp| {
                     let _ = shutdown();
-                    #[cfg(unix)] {
+                    #[cfg(unix)]
+                    {
                         let _ = kill(getpid(), Signal::SIGTSTP);
+                        HandlerOperation::Restart
                     }
                 }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
                 "Open file browser",
-                |app: &mut TuiApp| { app.nnn_open(); }
+                |app: &mut TuiApp| {
+                    app.nnn_open();
+                    HandlerOperation::Restart
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
@@ -167,27 +178,40 @@ impl<'a> TuiApp<'a> {
                     if let Some(todo) = app.todo_app.removed_todos.pop() {
                         app.todo_buffer.yank(todo);
                     }
+                    HandlerOperation::Nothing
                 }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
                 "Toggle daily",
-                |app: &mut TuiApp| { app.todo_app.toggle_current_daily(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.toggle_current_daily();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('W'), KeyModifiers::NONE),
                 "Toggle weekly",
-                |app: &mut TuiApp| { app.todo_app.toggle_current_weekly(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.toggle_current_weekly();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
                 "Schedule prompt",
-                |app: &mut TuiApp| { app.schedule_prompt(); }
+                |app: &mut TuiApp| {
+                    app.schedule_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
                 "Reminder prompt",
-                |app: &mut TuiApp| { app.reminder_prompt(); }
+                |app: &mut TuiApp| {
+                    app.reminder_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('M'), KeyModifiers::NONE),
@@ -196,22 +220,32 @@ impl<'a> TuiApp<'a> {
                     if let Some(todo) = app.todo_app.todo_mut() {
                         todo.toggle_schedule();
                     }
+                    HandlerOperation::Nothing
                 }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
                 "Toggle show done",
-                |app: &mut TuiApp| { app.todo_app.toggle_show_done(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.toggle_show_done();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE),
                 "Priority prompt",
-                |app: &mut TuiApp| { app.priority_prompt(); }
+                |app: &mut TuiApp| {
+                    app.priority_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('%'), KeyModifiers::NONE),
                 "Schedule restriction prompt",
-                |app: &mut TuiApp| { app.schedule_restriction_prompt(); }
+                |app: &mut TuiApp| {
+                    app.schedule_restriction_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
@@ -219,6 +253,7 @@ impl<'a> TuiApp<'a> {
                 |app: &mut TuiApp| {
                     let todo = app.todo_app.todo().cloned();
                     app.todo_buffer.yank(todo);
+                    HandlerOperation::Nothing
                 }
             ),
             keymap_entry!(
@@ -230,23 +265,31 @@ impl<'a> TuiApp<'a> {
                         list.push(todo);
                         app.todo_app.index = list.reorder_last();
                     }
+                    HandlerOperation::Nothing
                 }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
                 "Increase day by 1",
-                |app: &mut TuiApp| { app.todo_app.increase_day_by(1); }
+                |app: &mut TuiApp| {
+                    app.todo_app.increase_day_by(1);
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('I'), KeyModifiers::NONE),
                 "Increase day by -1",
-                |app: &mut TuiApp| { app.todo_app.increase_day_by(-1); }
+                |app: &mut TuiApp| {
+                    app.todo_app.increase_day_by(-1);
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
                 "Append todo",
                 |app: &mut TuiApp| {
                     app.nnn_append_todo();
+                    HandlerOperation::Restart
                 }
             ),
             keymap_entry!(
@@ -254,129 +297,200 @@ impl<'a> TuiApp<'a> {
                 "Output todo",
                 |app: &mut TuiApp| {
                     app.nnn_output_todo();
+                    HandlerOperation::Restart
                 }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
                 "Move down",
-                |app: &mut TuiApp| { app.todo_app.go_down(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.go_down();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
                 "Move down",
-                |app: &mut TuiApp| { app.todo_app.go_down(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.go_down();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
                 "Move up",
-                |app: &mut TuiApp| { app.todo_app.go_up(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.go_up();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
                 "Move up",
-                |app: &mut TuiApp| { app.todo_app.go_up(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.go_up();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
                 "Move right",
-                |app: &mut TuiApp| { app.todo_app.add_dependency_traverse_down(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.add_dependency_traverse_down();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
                 "Move right",
-                |app: &mut TuiApp| { app.todo_app.add_dependency_traverse_down(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.add_dependency_traverse_down();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
                 "Traverse down",
-                |app: &mut TuiApp| { app.todo_app.traverse_down(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.traverse_down();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
                 "Move left",
-                |app: &mut TuiApp| { app.todo_app.traverse_up(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.traverse_up();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
                 "Move left",
-                |app: &mut TuiApp| { app.todo_app.traverse_up(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.traverse_up();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
                 "Go to top",
-                |app: &mut TuiApp| { app.todo_app.index = 0; }
+                |app: &mut TuiApp| {
+                    app.todo_app.index = 0;
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
                 "Go to top",
-                |app: &mut TuiApp| { app.todo_app.index = 0; }
+                |app: &mut TuiApp| {
+                    app.todo_app.index = 0;
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
                 "Go to bottom",
-                |app: &mut TuiApp| { app.todo_app.index = app.todo_app.bottom(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.index = app.todo_app.bottom();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
                 "Go to bottom",
-                |app: &mut TuiApp| { app.todo_app.index = app.todo_app.bottom(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.index = app.todo_app.bottom();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
                 "Write",
-                |app: &mut TuiApp| { let _ = app.write(); }
+                |app: &mut TuiApp| {
+                    let _ = app.write();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE),
                 "Move current down",
-                |app: &mut TuiApp| { app.todo_app.move_current_down(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.move_current_down();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE),
                 "Move current up",
-                |app: &mut TuiApp| { app.todo_app.move_current_up(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.move_current_up();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE),
                 "Toggle right panel",
-                |app: &mut TuiApp| { app.show_right = !app.show_right; }
+                |app: &mut TuiApp| {
+                    app.show_right = !app.show_right;
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
                 "Toggle module",
-                |app: &mut TuiApp| { app.args.enable_module = !app.args.enable_module; }
+                |app: &mut TuiApp| {
+                    app.args.enable_module = !app.args.enable_module;
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('>'), KeyModifiers::NONE),
                 "Edit or add note",
                 |app: &mut TuiApp| {
                     app.todo_app.edit_or_add_note();
+                    HandlerOperation::Restart
                 }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
                 "Add dependency",
-                |app: &mut TuiApp| { app.todo_app.add_dependency(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.add_dependency();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE),
                 "Remove todo",
-                |app: &mut TuiApp| { app.todo_app.remove_todo(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.remove_todo();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
                 "Read",
-                |app: &mut TuiApp| { app.todo_app.read(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.read();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
                 "Remove current dependent",
-                |app: &mut TuiApp| { app.todo_app.remove_current_dependent(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.remove_current_dependent();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
                 "Toggle current done",
-                |app: &mut TuiApp| { app.todo_app.toggle_current_done(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.toggle_current_done();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
@@ -384,120 +498,181 @@ impl<'a> TuiApp<'a> {
                 |app: &mut TuiApp| {
                     app.tree_search.next();
                     app.tree_search.set_to_app(app.todo_app);
+                    HandlerOperation::Nothing
                 }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
                 "Search prompt",
-                |app: &mut TuiApp| { app.search_prompt(); }
+                |app: &mut TuiApp| {
+                    app.search_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('\''), KeyModifiers::NONE),
                 "Tree search prompt",
-                |app: &mut TuiApp| { app.tree_search_prompt(); }
+                |app: &mut TuiApp| {
+                    app.tree_search_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
                 "Append todo at first",
-                |app: &mut TuiApp| { app.append_prompt(); }
+                |app: &mut TuiApp| {
+                    app.append_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
                 "Edit todo",
-                |app: &mut TuiApp| { app.edit_prompt(false); }
+                |app: &mut TuiApp| {
+                    app.edit_prompt(false);
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE),
                 "Edit todo (start)",
-                |app: &mut TuiApp| { app.edit_prompt(true); }
+                |app: &mut TuiApp| {
+                    app.edit_prompt(true);
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
                 "Batch edit messages",
-                |app: &mut TuiApp| { app.todo_app.batch_editor_messages(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.batch_editor_messages();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('~'), KeyModifiers::NONE),
                 "Go to root",
-                |app: &mut TuiApp| { app.todo_app.go_root(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.go_root();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
                 "Quit and save prompt",
-                |app: &mut TuiApp| { app.quit_save_prompt(); }
+                |app: &mut TuiApp| {
+                    app.quit_save_prompt();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
                 "Batch edit messages",
-                |app: &mut TuiApp| { app.todo_app.batch_editor_messages(); }
+                |app: &mut TuiApp| {
+                    app.todo_app.batch_editor_messages();
+                    HandlerOperation::Restart
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
                 "Skip potato module",
-                |app: &mut TuiApp| { app.potato_module.skip(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.skip();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('H'), KeyModifiers::NONE),
                 "Increase potato timer",
-                |app: &mut TuiApp| { app.potato_module.increase_timer(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.increase_timer();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
                 "Toggle potato pause",
-                |app: &mut TuiApp| { app.potato_module.toggle_pause(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.toggle_pause();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE),
                 "Quit potato module",
-                |app: &mut TuiApp| { app.potato_module.quit(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.quit();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE),
                 "Decrease potato timer",
-                |app: &mut TuiApp| { app.potato_module.decrease_timer(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.decrease_timer();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
                 "Restart potato module",
-                |app: &mut TuiApp| { app.potato_module.restart(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.restart();
+                    HandlerOperation::Nothing
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE),
                 "FZF search",
                 |app: &mut TuiApp| {
                     fzf_search(app.todo_app);
+                    HandlerOperation::Restart
                 }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE),
                 "Increase pomodoro",
-                |app: &mut TuiApp| { app.potato_module.increase_pomodoro(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.increase_pomodoro();
+                    HandlerOperation::Restart
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE),
                 "Decrease pomodoro",
-                |app: &mut TuiApp| { app.potato_module.decrease_pomodoro(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.decrease_pomodoro();
+                    HandlerOperation::Restart
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE),
                 "Next potato module",
-                |app: &mut TuiApp| { app.potato_module.next(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.next();
+                    HandlerOperation::Restart
+                }
             ),
             keymap_entry!(
                 KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE),
                 "Previous potato module",
-                |app: &mut TuiApp| { app.potato_module.prev(); }
+                |app: &mut TuiApp| {
+                    app.potato_module.prev();
+                    HandlerOperation::Restart
+                }
             ),
         ];
         KeymapManager::from(keymaps_vec)
     }
 
-
     fn get_default_help_page(keymap: &KeymapManager) -> HelpPage {
         let mut help_page = HelpPage::default();
 
         for (key, keymap) in keymap.get_all() {
-            help_page.add_entry(key_event_to_string(&key).as_str(), keymap.description.clone().as_str());
+            help_page.add_entry(
+                key_event_to_string(key).as_str(),
+                keymap.description.clone().as_str(),
+            );
         }
 
         help_page
@@ -915,9 +1090,9 @@ impl<'a> TuiApp<'a> {
     fn handle_normal_input(&mut self) -> io::Result<HandlerOperation> {
         let event = event::read()?;
         if let Key(key) = event {
-            let action = { self.normal_keymaps.get_action(key) };
+            let action = self.normal_keymaps.get_action(key);
             if let Some(action) = action {
-                action(self);
+                return Ok(action(self));
             }
 
             // if key.kind == event::KeyEventKind::Press {

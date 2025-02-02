@@ -2,13 +2,11 @@ use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::hash_map::Iter;
 use std::collections::HashMap;
 use std::convert::From;
-use std::sync::Arc; // new import
+use std::sync::Arc;
 
 pub struct Keymap<'a> {
-    // key: KeyEvent,
-    // modifier: KeyModifiers,
     pub description: String,
-    pub action: Arc<dyn Fn(&mut super::TuiApp<'a>) + 'a>, // changed from Box to Arc
+    pub action: Arc<dyn Fn(&mut super::TuiApp<'a>) -> super::HandlerOperation + 'a>,
 }
 
 pub struct KeymapManager<'a> {
@@ -37,7 +35,10 @@ impl<'a> KeymapManager<'a> {
         }
     }
 
-    pub fn get_action(&self, key: KeyEvent) -> Option<Arc<dyn Fn(&mut super::TuiApp<'a>) + 'a>> {
+    pub fn get_action(
+        &self,
+        key: KeyEvent,
+    ) -> Option<Arc<dyn Fn(&mut super::TuiApp<'a>) -> super::HandlerOperation + 'a>> {
         self.keymaps.get(&key).map(|km| km.action.clone())
     }
 }
@@ -52,10 +53,13 @@ impl<'a> From<Vec<(KeyEvent, Keymap<'a>)>> for KeymapManager<'a> {
 #[macro_export]
 macro_rules! keymap_entry {
     ($key:expr, $desc:expr, $action:expr) => {
-        ($key, Keymap {
-            description: String::from($desc),
-            action: Arc::new($action),
-        })
+        (
+            $key,
+            Keymap {
+                description: String::from($desc),
+                action: Arc::new($action),
+            },
+        )
     };
 }
 
@@ -76,7 +80,7 @@ pub fn key_event_to_string(key_event: &KeyEvent) -> String {
         KeyCode::Down => "Down".into(),
         KeyCode::Left => "Left".into(),
         KeyCode::Right => "Right".into(),
-        other => format!("{:?}", other), // Fallback using Debug representation.
+        other => format!("{:?}", other),
     };
 
     format!("{}{}", modifier_str, keycode_str)
